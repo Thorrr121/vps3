@@ -4,16 +4,29 @@ import telebot
 import subprocess
 import datetime
 import time
-import re  
+import re
+import logging
 
-bot = telebot.TeleBot('7614008286:AAEvqf7u1Ba58tkZXr5DHk_rRrTbxsQ5VRs')
+# ✅ Enable detailed logging
+logging.basicConfig(level=logging.INFO)
 
+# ✅ Replace with your actual bot token from @BotFather
+BOT_TOKEN = '6387049462:AAFreKcPrZpOggSrfi54Pqu0X3qE7nm7EuI'
+bot = telebot.TeleBot(6387049462:AAFreKcPrZpOggSrfi54Pqu0X3qE7nm7EuI)
+
+# ✅ Admins
 admin_id = ["1383324178", "6060545769", "1871909759"]
 
+# ✅ Approved Users File
 APPROVED_USERS_FILE = "approved_users.txt"
 user_attacks = {}
 reset_time = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
 MAX_ATTACKS_PER_DAY = 20
+
+# ✅ Ensure correct bot token format
+if not BOT_TOKEN or len(BOT_TOKEN) < 45:
+    logging.error("⚠️ ERROR: Invalid Telegram Bot Token! Get a valid token from @BotFather.")
+    exit(1)
 
 def reset_attack_counts():
     global reset_time, user_attacks
@@ -39,7 +52,7 @@ approved_users = read_approved_users()
 def remove_expired_users():
     current_time = datetime.datetime.now()
     expired_users = []
-    
+
     for user_id, expiry_time in approved_users.items():
         expiry_date = datetime.datetime.strptime(expiry_time, "%Y-%m-%d %H:%M:%S")
         if current_time >= expiry_date:
@@ -56,18 +69,18 @@ def parse_duration(duration_str):
     days, hours = 0, 0
     day_match = re.search(r'(\d+)d', duration_str)
     hour_match = re.search(r'(\d+)h', duration_str)
-    
+
     if day_match:
         days = int(day_match.group(1))
     if hour_match:
         hours = int(hour_match.group(1))
-    
+
     return days, hours
 
 @bot.message_handler(commands=['approve'])
 def approve_user(message):
     user_id = str(message.chat.id)
-    
+
     if user_id not in admin_id:
         bot.reply_to(message, "🚫 Only Admins Can Approve Users!")
         return
@@ -116,31 +129,6 @@ def check_remaining_time(message):
         hours, minutes = divmod(hours, 3600)
         bot.reply_to(message, f"⏳ You have {int(days)} days, {int(hours)} hours, and {int(minutes)} minutes left.")
 
-@bot.message_handler(commands=['deny'])
-def deny_user(message):
-    user_id = str(message.chat.id)
-
-    if user_id not in admin_id:
-        bot.reply_to(message, "🚫 Only Admins Can Deny Users!")
-        return
-
-    command_parts = message.text.split()
-    if len(command_parts) < 2:
-        bot.reply_to(message, "⚠️ Usage: /deny <user_id>")
-        return
-
-    target_user_id = command_parts[1]
-
-    if target_user_id in approved_users:
-        del approved_users[target_user_id]
-        with open(APPROVED_USERS_FILE, "w") as file:
-            for uid, expiry_time in approved_users.items():
-                file.write(f"{uid},{expiry_time}\n")
-
-        bot.reply_to(message, f"❌ User {target_user_id} has been removed.")
-    else:
-        bot.reply_to(message, f"⚠️ User {target_user_id} is not in the approved list.")
-
 @bot.message_handler(commands=['bgmi'])
 def handle_bgmi(message):
     reset_attack_counts()
@@ -178,8 +166,11 @@ def handle_bgmi(message):
     else:
         bot.reply_to(message, "✅ Usage: /bgmi <target> <port> <time>")
 
+# ✅ Auto-restart on failure
 while True:
     try:
-        bot.polling(none_stop=True)
+        logging.info("🚀 Bot Started Successfully!")
+        bot.polling(none_stop=True, interval=1, timeout=30)
     except Exception as e:
-        print(e)
+        logging.error(f"⚠️ Telegram API Error: {e}")
+        time.sleep(5)  # Prevents infinite crashes
